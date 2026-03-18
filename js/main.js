@@ -29,7 +29,7 @@ arToolkitSource.init(() => {
 
 // ── AR 컨텍스트 ───────────────────────────────
 const arToolkitContext = new THREEx.ArToolkitContext({
-  cameraParametersUrl: THREEx.ArToolkitContext.baseURL + 'data/data/camera_para.dat',
+  cameraParametersUrl: 'data/data/camera_para.dat',
   detectionMode: 'mono',
 });
 
