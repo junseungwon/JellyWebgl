@@ -1,0 +1,54 @@
+AR.js + Three.js 이미지 트래킹 작업 계획
+Phase 1 — 환경 세팅
+Node.js 설치 — 로컬 개발 서버 실행용 (WebRTC는 반드시 HTTPS/localhost 필요)
+​
+
+폴더 구조 생성
+
+text
+my-ar-project/
+├── index.html
+├── assets/
+│   ├── target-image.jpg   ← 인식시킬 이미지
+│   └── model.glb          ← 올라갈 3D 모델
+└── js/
+    └── main.js
+라이브러리 CDN 연결 — AR.js + Three.js <script> 태그 추가
+
+Phase 2 — 이미지 디스크립터 생성
+AR.js NFT Creator 도구 접속 → 인식시킬 이미지 업로드
+​
+
+.fset, .fset3, .iset 3개 파일 다운로드 → assets/ 폴더에 저장
+
+이 단계가 AR.js에서 가장 중요한 전처리 과정. 이미지의 특징점(feature point)을 미리 추출해두는 것
+
+Phase 3 — 기본 씬 구성
+Three.js 씬 생성 — Scene, Camera, Renderer 초기화
+
+AR.js 카메라 소스 연결 — 기기 카메라와 Three.js 렌더러 연결
+
+NFT 마커 컨트롤러 등록 — 디스크립터 파일 경로 지정
+
+Phase 4 — 3D 오브젝트 연결
+GLTFLoader로 3D 모델 로드 — .glb 파일 불러오기
+
+이미지 인식 이벤트 연결 — 마커 감지 시 모델 visible = true, 사라지면 false
+
+애니메이션 루프 작성 — requestAnimationFrame으로 매 프레임 업데이트
+
+Phase 5 — 라이팅 및 연출 추가
+AmbientLight + DirectionalLight 추가 — 3D 모델이 잘 보이도록 조명 설정
+
+애니메이션 재생 (선택) — AnimationMixer로 모델 내장 애니메이션 실행
+
+파티클/이펙트 (선택) — THREE.Points로 주변 효과 추가
+
+Phase 6 — 테스트 및 배포
+localhost에서 테스트 — npx serve 또는 live-server로 로컬 HTTPS 실행
+
+모바일 테스트 — 같은 네트워크에서 스마트폰 브라우저로 접속 확인
+
+배포 — Vercel 등 무료 HTTPS 호스팅에 업로드
+​
+
