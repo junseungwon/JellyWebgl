@@ -5,8 +5,11 @@
 const clock = new THREE.Clock();
 
 // ── Renderer ──────────────────────────────────
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(window.devicePixelRatio);
+// 모바일에서 MSAA는 시각적 이득 없이 GPU 발열만 유발
+const _isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+const renderer = new THREE.WebGLRenderer({ antialias: !_isMobile, alpha: true });
+// 3x Retina 기기에서 픽셀 처리량 과다 방지 (2 이상은 AR 앱에서 무의미)
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.domElement.style.position = 'absolute';
 renderer.domElement.style.top = '0px';
@@ -59,6 +62,15 @@ let hasSmoothedPose = false;
 const _tmpPos = new THREE.Vector3();
 const _tmpQuat = new THREE.Quaternion();
 const _tmpScale = new THREE.Vector3();
+
+// ── 렌더/AR 프레임 제어 ────────────────────────
+const RENDER_FPS = 30;               // GPU: 화면 그리기 상한
+const AR_FPS    = 15;               // CPU: NFT 특징점 검출 상한
+const RENDER_MS = 1000 / RENDER_FPS;
+const AR_MS     = 1000 / AR_FPS;
+let _lastRenderTime = 0;
+let _lastARTime     = 0;
+let _lastMarkerVisible = null;       // DOM 업데이트 중복 방지용
 
 // ─────────────────────────────────────────────
 // Phase 4: 3D 모델 로드 및 이벤트 연결
@@ -213,13 +225,22 @@ window.addEventListener('resize', onResize);
 // 애니메이션 루프
 // ─────────────────────────────────────────────
 
-function animate() {
+function animate(timestamp) {
   requestAnimationFrame(animate);
+
+  // 탭이 숨겨진 상태면 모든 연산 스킵 (백그라운드 발열 방지)
+  if (document.hidden) return;
+
+  // 렌더링을 30fps로 제한 — 프레임 간격이 충분히 열리지 않으면 스킵
+  if (timestamp - _lastRenderTime < RENDER_MS) return;
+  _lastRenderTime = timestamp;
 
   const delta = clock.getDelta();
 
-  if (arToolkitSource.ready) {
+  // AR 특징점 검출을 15fps로 제한 — 렌더보다 CPU 비용이 훨씬 큼
+  if (arToolkitSource.ready && timestamp - _lastARTime >= AR_MS) {
     arToolkitContext.update(arToolkitSource.domElement);
+    _lastARTime = timestamp;
   }
 
   // 원본 포즈(markerRoot)를 스무딩 포즈(smoothedRoot)로 보정 복사
@@ -237,7 +258,8 @@ function animate() {
     } else {
       smoothedRoot.position.lerp(_tmpPos, SMOOTHING_ALPHA);
       smoothedRoot.quaternion.slerp(_tmpQuat, SMOOTHING_ALPHA);
-      smoothedRoot.scale.lerp(_tmpScale, SMOOTHING_ALPHA);
+      // scale은 NFT 트래킹에서 급격히 튀지 않으므로 lerp 없이 즉시 복사
+      smoothedRoot.scale.copy(_tmpScale);
     }
   } else {
     smoothedRoot.visible = false;
@@ -246,9 +268,19 @@ function animate() {
 
   if (mixer) mixer.update(delta);
 
-  statusMsg.style.opacity = markerRoot.visible ? '1' : '0';
+  // opacity는 값이 실제로 바뀔 때만 DOM에 접근 (매 프레임 스타일 재계산 방지)
+  const isVisible = markerRoot.visible;
+  if (isVisible !== _lastMarkerVisible) {
+    statusMsg.style.opacity = isVisible ? '1' : '0';
+    _lastMarkerVisible = isVisible;
+  }
 
   renderer.render(scene, camera);
 }
 
-animate();
+// 탭 전환 후 복귀 시 루프 재개
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) requestAnimationFrame(animate);
+});
+
+requestAnimationFrame(animate);
