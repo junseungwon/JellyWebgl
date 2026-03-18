@@ -27,7 +27,8 @@
         left: 0;
       }
       #status-msg {
-        display: none;
+        display: block;
+        opacity: 0;
         position: fixed;
         top: 24px;
         left: 50%;
@@ -42,12 +43,114 @@
         letter-spacing: 1px;
         z-index: 999;
         pointer-events: none;
+        transition: none;
+      }
+      #ctrl-panel {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(8px);
+        padding: 16px 24px;
+        border-radius: 20px;
+        z-index: 999;
+        user-select: none;
+        min-width: 280px;
+      }
+      .ctrl-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .ctrl-row label {
+        color: #aaa;
+        font-family: sans-serif;
+        font-size: 12px;
+        font-weight: bold;
+        width: 14px;
+        text-align: center;
+        flex-shrink: 0;
+      }
+      .ctrl-row label.lbl-scale { color: #fff; }
+      .ctrl-row label.lbl-x     { color: #ff6b6b; }
+      .ctrl-row label.lbl-y     { color: #6bffb0; }
+      .ctrl-row label.lbl-z     { color: #6bb8ff; }
+      .ctrl-row label.lbl-rx    { color: #ffcf5a; }
+      .ctrl-row label.lbl-ry    { color: #d37bff; }
+      .ctrl-row label.lbl-rz    { color: #52d9ff; }
+      .ctrl-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        flex: 1;
+        height: 4px;
+        border-radius: 2px;
+        background: rgba(255,255,255,0.2);
+        outline: none;
+        cursor: pointer;
+      }
+      .ctrl-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 0 4px rgba(0,0,0,0.5);
+      }
+      .ctrl-val {
+        color: #fff;
+        font-family: monospace;
+        font-size: 13px;
+        min-width: 46px;
+        text-align: right;
+        flex-shrink: 0;
       }
     </style>
   </head>
   <body>
     <div id="ar-container"></div>
     <div id="status-msg">✅ 이미지 인식 성공!</div>
+    <div id="ctrl-panel">
+      <div class="ctrl-row">
+        <label class="lbl-scale">S</label>
+        <input class="ctrl-slider" id="scale-slider" type="range" min="0.1" max="100.0" step="0.05" value="52.15" />
+        <span class="ctrl-val" id="scale-value">52.15</span>
+      </div>
+      <div class="ctrl-row">
+        <label class="lbl-x">X</label>
+        <input class="ctrl-slider" id="x-slider" type="range" min="-1000" max="1000" step="0.05" value="17.90" />
+        <span class="ctrl-val" id="x-value">17.90</span>
+      </div>
+      <div class="ctrl-row">
+        <label class="lbl-y">Y</label>
+        <input class="ctrl-slider" id="y-slider" type="range" min="-1000" max="1000" step="0.05" value="-41.80" />
+        <span class="ctrl-val" id="y-value">-41.80</span>
+      </div>
+      <div class="ctrl-row">
+        <label class="lbl-z">Z</label>
+        <input class="ctrl-slider" id="z-slider" type="range" min="-1000" max="1000" step="0.05" value="-29.85" />
+        <span class="ctrl-val" id="z-value">-29.85</span>
+      </div>
+      <div class="ctrl-row">
+        <label class="lbl-rx">Rx</label>
+        <input class="ctrl-slider" id="rx-slider" type="range" min="-180" max="180" step="1" value="0" />
+        <span class="ctrl-val" id="rx-value">0</span>
+      </div>
+      <div class="ctrl-row">
+        <label class="lbl-ry">Ry</label>
+        <input class="ctrl-slider" id="ry-slider" type="range" min="-180" max="180" step="1" value="0" />
+        <span class="ctrl-val" id="ry-value">0</span>
+      </div>
+      <div class="ctrl-row">
+        <label class="lbl-rz">Rz</label>
+        <input class="ctrl-slider" id="rz-slider" type="range" min="-180" max="180" step="1" value="0" />
+        <span class="ctrl-val" id="rz-value">0</span>
+      </div>
+    </div>
 
     <!-- Three.js r128 (AR.js 호환 안정 버전) -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>

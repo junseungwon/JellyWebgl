@@ -48,20 +48,127 @@ const markerControls = new THREEx.ArMarkerControls(arToolkitContext, markerRoot,
   descriptorsUrl: 'assets/target-image',  // ← Phase 2 디스크립터 경로
 });
 
+// ── 트래킹 떨림 보정(스무딩) ───────────────────
+// markerRoot(원본 추적 포즈)를 smoothedRoot로 복사하면서 lerp/slerp로 완만하게 따라가게 함
+const smoothedRoot = new THREE.Group();
+scene.add(smoothedRoot);
+smoothedRoot.visible = false;
+
+const SMOOTHING_ALPHA = 0.18; // 0~1 (값이 작을수록 더 부드럽지만 지연이 커짐)
+let hasSmoothedPose = false;
+const _tmpPos = new THREE.Vector3();
+const _tmpQuat = new THREE.Quaternion();
+const _tmpScale = new THREE.Vector3();
+
 // ─────────────────────────────────────────────
 // Phase 4: 3D 모델 로드 및 이벤트 연결
 // ─────────────────────────────────────────────
 
 let mixer = null;
+let loadedModel = null;
+let unitScale = 1;     // maxAxis 기준 1배율일 때의 normalizedScale
+let baseOffset = { x: 0, y: 0, z: 0 };  // 바닥 중앙 정렬 오프셋 (scale=1 기준)
 markerRoot.visible = false;
+
+// 슬라이더 연결
+const scaleSlider = document.getElementById('scale-slider');
+const scaleValueLabel = document.getElementById('scale-value');
+const xSlider = document.getElementById('x-slider');
+const ySlider = document.getElementById('y-slider');
+const zSlider = document.getElementById('z-slider');
+const xValueLabel = document.getElementById('x-value');
+const yValueLabel = document.getElementById('y-value');
+const zValueLabel = document.getElementById('z-value');
+const rxSlider = document.getElementById('rx-slider');
+const rySlider = document.getElementById('ry-slider');
+const rzSlider = document.getElementById('rz-slider');
+const rxValueLabel = document.getElementById('rx-value');
+const ryValueLabel = document.getElementById('ry-value');
+const rzValueLabel = document.getElementById('rz-value');
+
+function applyTransform() {
+  if (!loadedModel) return;
+  const s = unitScale * parseFloat(scaleSlider.value);
+  loadedModel.scale.setScalar(s);
+  loadedModel.position.set(
+    baseOffset.x * s + parseFloat(xSlider.value),
+    baseOffset.y * s + parseFloat(ySlider.value),
+    baseOffset.z * s + parseFloat(zSlider.value)
+  );
+  loadedModel.rotation.set(
+    THREE.MathUtils.degToRad(parseFloat(rxSlider.value)),
+    THREE.MathUtils.degToRad(parseFloat(rySlider.value)),
+    THREE.MathUtils.degToRad(parseFloat(rzSlider.value))
+  );
+}
+
+// 초기 라벨 동기화(기본값 표시 보장)
+scaleValueLabel.textContent = parseFloat(scaleSlider.value).toFixed(2);
+xValueLabel.textContent = parseFloat(xSlider.value).toFixed(2);
+yValueLabel.textContent = parseFloat(ySlider.value).toFixed(2);
+zValueLabel.textContent = parseFloat(zSlider.value).toFixed(2);
+rxValueLabel.textContent = String(parseInt(rxSlider.value, 10));
+ryValueLabel.textContent = String(parseInt(rySlider.value, 10));
+rzValueLabel.textContent = String(parseInt(rzSlider.value, 10));
+
+scaleSlider.addEventListener('input', () => {
+  scaleValueLabel.textContent = parseFloat(scaleSlider.value).toFixed(2);
+  applyTransform();
+});
+xSlider.addEventListener('input', () => {
+  xValueLabel.textContent = parseFloat(xSlider.value).toFixed(2);
+  applyTransform();
+});
+ySlider.addEventListener('input', () => {
+  yValueLabel.textContent = parseFloat(ySlider.value).toFixed(2);
+  applyTransform();
+});
+zSlider.addEventListener('input', () => {
+  zValueLabel.textContent = parseFloat(zSlider.value).toFixed(2);
+  applyTransform();
+});
+rxSlider.addEventListener('input', () => {
+  rxValueLabel.textContent = String(parseInt(rxSlider.value, 10));
+  applyTransform();
+});
+rySlider.addEventListener('input', () => {
+  ryValueLabel.textContent = String(parseInt(rySlider.value, 10));
+  applyTransform();
+});
+rzSlider.addEventListener('input', () => {
+  rzValueLabel.textContent = String(parseInt(rzSlider.value, 10));
+  applyTransform();
+});
 
 const gltfLoader = new THREE.GLTFLoader();
 gltfLoader.load(
-  'assets/model.glb',                      // ← 실제 .glb 파일로 교체
+  'assets/model.glb',
   (gltf) => {
     const model = gltf.scene;
-    model.scale.set(1, 1, 1);              // 필요에 따라 스케일 조정
-    markerRoot.add(model);
+
+    // 바운딩박스로 모델 실제 크기 측정
+    const box = new THREE.Box3().setFromObject(model);
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    box.getSize(size);
+    box.getCenter(center);
+
+    // 가장 긴 축을 1로 맞추는 단위 스케일 계산
+    const maxAxis = Math.max(size.x, size.y, size.z);
+    unitScale = 1 / maxAxis;
+
+    // 바닥 중앙 정렬 오프셋 (scale=1 기준, applyScale에서 곱해서 사용)
+    baseOffset = {
+      x: -center.x / maxAxis,
+      y: -box.min.y / maxAxis,
+      z: -center.z / maxAxis,
+    };
+
+    loadedModel = model;
+    smoothedRoot.add(model);
+
+    // 슬라이더 초기값 반영
+    applyTransform();
 
     if (gltf.animations && gltf.animations.length > 0) {
       mixer = new THREE.AnimationMixer(model);
@@ -74,14 +181,9 @@ gltfLoader.load(
 
 // 마커 감지 / 소실 이벤트
 const statusMsg = document.getElementById('status-msg');
-markerControls.addEventListener('markerFound', () => {
-  markerRoot.visible = true;
-  statusMsg.style.display = 'block';
-});
-markerControls.addEventListener('markerLost', () => {
-  markerRoot.visible = false;
-  statusMsg.style.display = 'none';
-});
+
+markerControls.addEventListener('markerFound', () => { markerRoot.visible = true;  });
+markerControls.addEventListener('markerLost',  () => { markerRoot.visible = false; });
 
 // ─────────────────────────────────────────────
 // Phase 5: 라이팅
@@ -120,7 +222,31 @@ function animate() {
     arToolkitContext.update(arToolkitSource.domElement);
   }
 
+  // 원본 포즈(markerRoot)를 스무딩 포즈(smoothedRoot)로 보정 복사
+  if (markerRoot.visible) {
+    markerRoot.getWorldPosition(_tmpPos);
+    markerRoot.getWorldQuaternion(_tmpQuat);
+    markerRoot.getWorldScale(_tmpScale);
+
+    smoothedRoot.visible = true;
+    if (!hasSmoothedPose) {
+      smoothedRoot.position.copy(_tmpPos);
+      smoothedRoot.quaternion.copy(_tmpQuat);
+      smoothedRoot.scale.copy(_tmpScale);
+      hasSmoothedPose = true;
+    } else {
+      smoothedRoot.position.lerp(_tmpPos, SMOOTHING_ALPHA);
+      smoothedRoot.quaternion.slerp(_tmpQuat, SMOOTHING_ALPHA);
+      smoothedRoot.scale.lerp(_tmpScale, SMOOTHING_ALPHA);
+    }
+  } else {
+    smoothedRoot.visible = false;
+    hasSmoothedPose = false;
+  }
+
   if (mixer) mixer.update(delta);
+
+  statusMsg.style.opacity = markerRoot.visible ? '1' : '0';
 
   renderer.render(scene, camera);
 }
