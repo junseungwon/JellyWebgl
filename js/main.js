@@ -73,8 +73,15 @@ gltfLoader.load(
 );
 
 // 마커 감지 / 소실 이벤트
-markerControls.addEventListener('markerFound',  () => { markerRoot.visible = true;  });
-markerControls.addEventListener('markerLost',   () => { markerRoot.visible = false; });
+const statusMsg = document.getElementById('status-msg');
+markerControls.addEventListener('markerFound', () => {
+  markerRoot.visible = true;
+  statusMsg.style.display = 'block';
+});
+markerControls.addEventListener('markerLost', () => {
+  markerRoot.visible = false;
+  statusMsg.style.display = 'none';
+});
 
 // ─────────────────────────────────────────────
 // Phase 5: 라이팅
