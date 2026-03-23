@@ -74,13 +74,9 @@
         text-align: center;
         flex-shrink: 0;
       }
-      .ctrl-row label.lbl-scale { color: #fff; }
-      .ctrl-row label.lbl-x     { color: #ff6b6b; }
-      .ctrl-row label.lbl-y     { color: #6bffb0; }
-      .ctrl-row label.lbl-z     { color: #6bb8ff; }
-      .ctrl-row label.lbl-rx    { color: #ffcf5a; }
-      .ctrl-row label.lbl-ry    { color: #d37bff; }
-      .ctrl-row label.lbl-rz    { color: #52d9ff; }
+      .ctrl-row label.lbl-rx    { color: #ffcf5a; width: 24px; }
+      .ctrl-row label.lbl-ry    { color: #d37bff; width: 24px; }
+      .ctrl-row label.lbl-rz    { color: #52d9ff; width: 24px; }
       .ctrl-slider {
         -webkit-appearance: none;
         appearance: none;
@@ -115,39 +111,19 @@
     <div id="status-msg">✅ 이미지 인식 성공!</div>
     <div id="ctrl-panel">
       <div class="ctrl-row">
-        <label class="lbl-scale">S</label>
-        <input class="ctrl-slider" id="scale-slider" type="range" min="0.1" max="120.0" step="0.05" value="0.10" />
-        <span class="ctrl-val" id="scale-value">0.10</span>
-      </div>
-      <div class="ctrl-row">
-        <label class="lbl-x">X</label>
-        <input class="ctrl-slider" id="x-slider" type="range" min="-500" max="500" step="0.05" value="-97.00" />
-        <span class="ctrl-val" id="x-value">-97.00</span>
-      </div>
-      <div class="ctrl-row">
-        <label class="lbl-y">Y</label>
-        <input class="ctrl-slider" id="y-slider" type="range" min="-500" max="500" step="0.05" value="134.35" />
-        <span class="ctrl-val" id="y-value">134.35</span>
-      </div>
-      <div class="ctrl-row">
-        <label class="lbl-z">Z</label>
-        <input class="ctrl-slider" id="z-slider" type="range" min="-500" max="500" step="0.05" value="-118.30" />
-        <span class="ctrl-val" id="z-value">-118.30</span>
-      </div>
-      <div class="ctrl-row">
         <label class="lbl-rx">Rx</label>
-        <input class="ctrl-slider" id="rx-slider" type="range" min="-180" max="180" step="1" value="24" />
-        <span class="ctrl-val" id="rx-value">24</span>
+        <input class="ctrl-slider" id="rot-x-slider" type="range" min="-180" max="180" step="1" value="24" />
+        <span class="ctrl-val" id="rot-x-value">24</span>
       </div>
       <div class="ctrl-row">
         <label class="lbl-ry">Ry</label>
-        <input class="ctrl-slider" id="ry-slider" type="range" min="-180" max="180" step="1" value="8" />
-        <span class="ctrl-val" id="ry-value">8</span>
+        <input class="ctrl-slider" id="rot-y-slider" type="range" min="-180" max="180" step="1" value="8" />
+        <span class="ctrl-val" id="rot-y-value">8</span>
       </div>
       <div class="ctrl-row">
         <label class="lbl-rz">Rz</label>
-        <input class="ctrl-slider" id="rz-slider" type="range" min="-180" max="180" step="1" value="0" />
-        <span class="ctrl-val" id="rz-value">0</span>
+        <input class="ctrl-slider" id="rot-z-slider" type="range" min="-180" max="180" step="1" value="0" />
+        <span class="ctrl-val" id="rot-z-value">0</span>
       </div>
     </div>
 
@@ -161,6 +137,6 @@
     <script src="js/ar-threex.js"></script>
 
     <!-- 메인 스크립트 -->
-    <script src="js/main.js?v=idlefix-1"></script>
+    <script src="js/main.js?v=stabilize-3"></script>
   </body>
 </html>

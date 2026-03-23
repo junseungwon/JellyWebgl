@@ -61,7 +61,7 @@ const SMOOTHING_ALPHA = 0.18; // 0~1 (값이 작을수록 더 부드럽지만 �
 let hasSmoothedPose = false;
 const _tmpPos = new THREE.Vector3();
 const _tmpQuat = new THREE.Quaternion();
-const _tmpScale = new THREE.Vector3();
+const _tmpLabelPos = new THREE.Vector3();
 
 // ── 렌더/AR 프레임 제어 ────────────────────────
 const RENDER_FPS = 30;               // GPU: 화면 그리기 상한
@@ -82,47 +82,63 @@ let unitScale = 1;     // maxAxis 기준 1배율일 때의 normalizedScale
 let baseOffset = { x: 0, y: 0, z: 0 };  // 바닥 중앙 정렬 오프셋 (scale=1 기준)
 markerRoot.visible = false;
 let _isTrackingParent = false;
-// 슬라이더의 큰 숫자를 AR 좌표계의 안전 범위로 매핑하기 위한 스케일
-const OFFSET_UNIT = 0.001;
-const PREVIEW_OFFSET_LIMIT = 2.5;
-const TRACKING_OFFSET_LIMIT = 1.2;
-const MIN_SAFE_SCALE = 0.1;
-const MAX_SAFE_SCALE = 120.0;
+// 포지션은 고정 중앙 정렬로 유지하고, 회전만 UI로 조절
+const TRACKING_Y_LIFT = 0.18; // 마커 표면 위로 캐릭터를 띄우는 기본 높이
+const TRACKING_CENTER_SHIFT_X = 0.5; // NFT 원점(좌하단) -> 중앙 보정
+const TRACKING_CENTER_SHIFT_Y = 0.5; // NFT 원점(좌하단) -> 중앙 보정
+const TRACKING_CENTER_SHIFT_Z = 0.0;
+const FIXED_TRACKING_SCALE = 1.8; // 과도한 스케일로 인한 깨짐 방지
+const PREVIEW_SCALE = 1.0;
+// 제거된 포지션 UI의 기본값을 코드 상수로 고정 적용
+const DEFAULT_OFFSET_X = 150;
+const DEFAULT_OFFSET_Y = 0;
+const DEFAULT_OFFSET_Z = -150;
+const DEFAULT_OFFSET_GAIN = 20.0;
+const BASE_OFFSET_UNIT = 0.001;
+const MAX_TRACKING_FIXED_OFFSET = 1.5;
 
 // 슬라이더 연결
-const scaleSlider = document.getElementById('scale-slider');
-const scaleValueLabel = document.getElementById('scale-value');
-const xSlider = document.getElementById('x-slider');
-const ySlider = document.getElementById('y-slider');
-const zSlider = document.getElementById('z-slider');
-const xValueLabel = document.getElementById('x-value');
-const yValueLabel = document.getElementById('y-value');
-const zValueLabel = document.getElementById('z-value');
-const rxSlider = document.getElementById('rx-slider');
-const rySlider = document.getElementById('ry-slider');
-const rzSlider = document.getElementById('rz-slider');
-const rxValueLabel = document.getElementById('rx-value');
-const ryValueLabel = document.getElementById('ry-value');
-const rzValueLabel = document.getElementById('rz-value');
+const rotXSlider = document.getElementById('rot-x-slider');
+const rotYSlider = document.getElementById('rot-y-slider');
+const rotZSlider = document.getElementById('rot-z-slider');
+const rotXValueLabel = document.getElementById('rot-x-value');
+const rotYValueLabel = document.getElementById('rot-y-value');
+const rotZValueLabel = document.getElementById('rot-z-value');
 
 function applyTransform() {
   if (!loadedModel) return;
-  const rawScale = THREE.MathUtils.clamp(parseFloat(scaleSlider.value), MIN_SAFE_SCALE, MAX_SAFE_SCALE);
+  const rawScale = _isTrackingParent ? FIXED_TRACKING_SCALE : PREVIEW_SCALE;
   const s = unitScale * rawScale;
-  const offsetLimit = _isTrackingParent ? TRACKING_OFFSET_LIMIT : PREVIEW_OFFSET_LIMIT;
-  const safeX = THREE.MathUtils.clamp(parseFloat(xSlider.value) * OFFSET_UNIT, -offsetLimit, offsetLimit);
-  const safeY = THREE.MathUtils.clamp(parseFloat(ySlider.value) * OFFSET_UNIT, -offsetLimit, offsetLimit);
-  const safeZ = THREE.MathUtils.clamp(parseFloat(zSlider.value) * OFFSET_UNIT, -offsetLimit, offsetLimit);
+  const offsetUnit = BASE_OFFSET_UNIT * DEFAULT_OFFSET_GAIN;
+  const fixedOffsetX = THREE.MathUtils.clamp(
+    DEFAULT_OFFSET_X * offsetUnit,
+    -MAX_TRACKING_FIXED_OFFSET,
+    MAX_TRACKING_FIXED_OFFSET
+  );
+  const fixedOffsetY = THREE.MathUtils.clamp(
+    DEFAULT_OFFSET_Y * offsetUnit,
+    -MAX_TRACKING_FIXED_OFFSET,
+    MAX_TRACKING_FIXED_OFFSET
+  );
+  const fixedOffsetZ = THREE.MathUtils.clamp(
+    DEFAULT_OFFSET_Z * offsetUnit,
+    -MAX_TRACKING_FIXED_OFFSET,
+    MAX_TRACKING_FIXED_OFFSET
+  );
+  const safeX = _isTrackingParent ? TRACKING_CENTER_SHIFT_X + fixedOffsetX : fixedOffsetX;
+  const safeY = _isTrackingParent ? TRACKING_CENTER_SHIFT_Y + fixedOffsetY : fixedOffsetY;
+  const safeZ = _isTrackingParent ? TRACKING_CENTER_SHIFT_Z + fixedOffsetZ : fixedOffsetZ;
+  const liftY = _isTrackingParent ? 0 : TRACKING_Y_LIFT;
   loadedModel.scale.setScalar(s);
   loadedModel.position.set(
     baseOffset.x * s + safeX,
-    baseOffset.y * s + safeY,
+    baseOffset.y * s + safeY + liftY,
     baseOffset.z * s + safeZ
   );
   loadedModel.rotation.set(
-    THREE.MathUtils.degToRad(parseFloat(rxSlider.value)),
-    THREE.MathUtils.degToRad(parseFloat(rySlider.value)),
-    THREE.MathUtils.degToRad(parseFloat(rzSlider.value))
+    THREE.MathUtils.degToRad(parseFloat(rotXSlider.value)),
+    THREE.MathUtils.degToRad(parseFloat(rotYSlider.value)),
+    THREE.MathUtils.degToRad(parseFloat(rotZSlider.value))
   );
 }
 
@@ -134,40 +150,20 @@ function setModelParent(useTrackingParent) {
 }
 
 // 초기 라벨 동기화(기본값 표시 보장)
-scaleValueLabel.textContent = parseFloat(scaleSlider.value).toFixed(2);
-xValueLabel.textContent = parseFloat(xSlider.value).toFixed(2);
-yValueLabel.textContent = parseFloat(ySlider.value).toFixed(2);
-zValueLabel.textContent = parseFloat(zSlider.value).toFixed(2);
-rxValueLabel.textContent = String(parseInt(rxSlider.value, 10));
-ryValueLabel.textContent = String(parseInt(rySlider.value, 10));
-rzValueLabel.textContent = String(parseInt(rzSlider.value, 10));
+rotXValueLabel.textContent = String(parseInt(rotXSlider.value, 10));
+rotYValueLabel.textContent = String(parseInt(rotYSlider.value, 10));
+rotZValueLabel.textContent = String(parseInt(rotZSlider.value, 10));
 
-scaleSlider.addEventListener('input', () => {
-  scaleValueLabel.textContent = parseFloat(scaleSlider.value).toFixed(2);
+rotXSlider.addEventListener('input', () => {
+  rotXValueLabel.textContent = String(parseInt(rotXSlider.value, 10));
   applyTransform();
 });
-xSlider.addEventListener('input', () => {
-  xValueLabel.textContent = parseFloat(xSlider.value).toFixed(2);
+rotYSlider.addEventListener('input', () => {
+  rotYValueLabel.textContent = String(parseInt(rotYSlider.value, 10));
   applyTransform();
 });
-ySlider.addEventListener('input', () => {
-  yValueLabel.textContent = parseFloat(ySlider.value).toFixed(2);
-  applyTransform();
-});
-zSlider.addEventListener('input', () => {
-  zValueLabel.textContent = parseFloat(zSlider.value).toFixed(2);
-  applyTransform();
-});
-rxSlider.addEventListener('input', () => {
-  rxValueLabel.textContent = String(parseInt(rxSlider.value, 10));
-  applyTransform();
-});
-rySlider.addEventListener('input', () => {
-  ryValueLabel.textContent = String(parseInt(rySlider.value, 10));
-  applyTransform();
-});
-rzSlider.addEventListener('input', () => {
-  rzValueLabel.textContent = String(parseInt(rzSlider.value, 10));
+rotZSlider.addEventListener('input', () => {
+  rotZValueLabel.textContent = String(parseInt(rotZSlider.value, 10));
   applyTransform();
 });
 
@@ -179,8 +175,15 @@ gltfLoader.load(
     // GLB에 포함된 vertex color(COLOR_0/COLOR_1)로 인한 얼룩 패턴 방지
     model.traverse((obj) => {
       if (!obj.isMesh) return;
+      obj.frustumCulled = false;
       if (obj.geometry) {
         obj.geometry.deleteAttribute('color');
+        if (!obj.geometry.attributes.normal) {
+          obj.geometry.computeVertexNormals();
+        }
+      }
+      if (obj.isSkinnedMesh && typeof obj.normalizeSkinWeights === 'function') {
+        obj.normalizeSkinWeights();
       }
       const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
       materials.forEach((mat) => {
@@ -207,7 +210,7 @@ gltfLoader.load(
     // 바닥 중앙 정렬 오프셋 (scale=1 기준, applyScale에서 곱해서 사용)
     baseOffset = {
       x: -center.x / maxAxis,
-      y: -box.min.y / maxAxis,
+      y: -center.y / maxAxis,
       z: -center.z / maxAxis,
     };
 
@@ -326,19 +329,19 @@ function animate(timestamp) {
   if (markerRoot.visible) {
     markerRoot.getWorldPosition(_tmpPos);
     markerRoot.getWorldQuaternion(_tmpQuat);
-    markerRoot.getWorldScale(_tmpScale);
 
     smoothedRoot.visible = true;
     if (!hasSmoothedPose) {
       smoothedRoot.position.copy(_tmpPos);
       smoothedRoot.quaternion.copy(_tmpQuat);
-      smoothedRoot.scale.copy(_tmpScale);
+      // NFT scale 변동은 스키닝 메쉬 왜곡을 유발할 수 있어 고정 스케일 유지
+      smoothedRoot.scale.set(1, 1, 1);
       hasSmoothedPose = true;
     } else {
       smoothedRoot.position.lerp(_tmpPos, SMOOTHING_ALPHA);
       smoothedRoot.quaternion.slerp(_tmpQuat, SMOOTHING_ALPHA);
-      // scale은 NFT 트래킹에서 급격히 튀지 않으므로 lerp 없이 즉시 복사
-      smoothedRoot.scale.copy(_tmpScale);
+      // marker scale은 적용하지 않고 고정값 유지
+      smoothedRoot.scale.set(1, 1, 1);
     }
   } else {
     smoothedRoot.visible = false;
@@ -352,6 +355,16 @@ function animate(timestamp) {
   if (isVisible !== _lastMarkerVisible) {
     statusMsg.style.opacity = isVisible ? '1' : '0';
     _lastMarkerVisible = isVisible;
+  }
+  if (isVisible) {
+    // 마커 중심점을 화면 좌표로 투영해 상태 메시지를 마커 바로 위에 고정
+    markerRoot.getWorldPosition(_tmpLabelPos);
+    _tmpLabelPos.project(camera);
+    const x = (_tmpLabelPos.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-_tmpLabelPos.y * 0.5 + 0.5) * window.innerHeight;
+    statusMsg.style.left = `${x}px`;
+    statusMsg.style.top = `${Math.max(16, y - 44)}px`;
+    statusMsg.style.transform = 'translate(-50%, -100%)';
   }
 
   renderer.render(scene, camera);
