@@ -111,46 +111,38 @@ let _lastMarkerVisible = null;       // DOM 업데이트 중복 방지용
 // ─────────────────────────────────────────────
 
 let loadedModel = null;
+let animationMixer = null;
+let activeAction = null;
+const animationClock = new THREE.Clock();
 let unitScale = 1;     // maxAxis 기준 1배율일 때의 normalizedScale
 let baseOffset = { x: 0, y: 0, z: 0 };  // 바닥 중앙 정렬 오프셋 (scale=1 기준)
 markerRoot.visible = false;
 let _isTrackingParent = false;
 const DEBUG_MESH = true;
-// 안정 구간: 슬라이더 값은 유지하되 실제 좌표는 축소/클램프 적용
+// 고정 파라미터
+const DEFAULT_MODEL_SCALE = 6.7;
+const DEFAULT_MODEL_GAIN = 1.0;
+const DEFAULT_ROT_X_DEG = -90;
+const DEFAULT_ROT_Y_DEG = 8;
+const DEFAULT_ROT_Z_DEG = 0;
 const TRACKING_Y_LIFT = 0.18; // 마커 표면 위로 캐릭터를 띄우는 기본 높이
 const TRACKING_CENTER_SHIFT_X = 0.5; // NFT 원점(좌하단) -> 중앙 보정
 const TRACKING_CENTER_SHIFT_Y = 0.5; // NFT 원점(좌하단) -> 중앙 보정
 const TRACKING_CENTER_SHIFT_Z = 0.0;
-const MIN_SAFE_SCALE = 0.1;
-const MAX_SAFE_SCALE = 220.0;
-const TRACKING_MAX_SAFE_SCALE = MAX_SAFE_SCALE; // 런타임 슬라이더 값을 트래킹 중에도 그대로 반영
+const TRACKING_MAX_SAFE_SCALE = DEFAULT_MODEL_SCALE;
 const TRACKING_BOOTSTRAP_MS = 220;    // markerFound 직후 스케일 워밍업 시간
 const TRACKING_RUNTIME_SCALE_CAP = 60.0; // 트래킹 중 급격한 대배율을 제한
 let _trackingScaleUnlockAt = 0;
 let _trackingScaleRestored = true;
 
-// 슬라이더 연결
-const scaleSlider = document.getElementById('scale-slider');
-const gainSlider = document.getElementById('gain-slider');
-const rotXSlider = document.getElementById('rot-x-slider');
-const rotYSlider = document.getElementById('rot-y-slider');
-const rotZSlider = document.getElementById('rot-z-slider');
-const scaleValueLabel = document.getElementById('scale-value');
-const gainValueLabel = document.getElementById('gain-value');
-const rotXValueLabel = document.getElementById('rot-x-value');
-const rotYValueLabel = document.getElementById('rot-y-value');
-const rotZValueLabel = document.getElementById('rot-z-value');
-
 function applyTransform() {
   if (!loadedModel) return;
-  const rawScale = THREE.MathUtils.clamp(parseFloat(scaleSlider.value), MIN_SAFE_SCALE, MAX_SAFE_SCALE);
-  const gain = THREE.MathUtils.clamp(parseFloat(gainSlider.value), 1.0, 60.0);
-  const trackingSafeScale = Math.min(rawScale, TRACKING_MAX_SAFE_SCALE);
+  const trackingSafeScale = Math.min(DEFAULT_MODEL_SCALE, TRACKING_MAX_SAFE_SCALE);
   const isBootstrapWindow = _isTrackingParent && performance.now() < _trackingScaleUnlockAt;
   const scaleForRender = isBootstrapWindow
     ? Math.min(trackingSafeScale, 6.0)
     : Math.min(trackingSafeScale, TRACKING_RUNTIME_SCALE_CAP);
-  const s = unitScale * scaleForRender * gain;
+  const s = unitScale * scaleForRender * DEFAULT_MODEL_GAIN;
   const safeX = 0;
   const safeY = 0;
   const safeZ = 0;
@@ -165,13 +157,12 @@ function applyTransform() {
     baseOffset.z * s + anchorZ + safeZ
   );
   loadedModel.rotation.set(
-    THREE.MathUtils.degToRad(parseFloat(rotXSlider.value)),
-    THREE.MathUtils.degToRad(parseFloat(rotYSlider.value)),
-    THREE.MathUtils.degToRad(parseFloat(rotZSlider.value))
+    THREE.MathUtils.degToRad(DEFAULT_ROT_X_DEG),
+    THREE.MathUtils.degToRad(DEFAULT_ROT_Y_DEG),
+    THREE.MathUtils.degToRad(DEFAULT_ROT_Z_DEG)
   );
   if (DEBUG_MESH && _isTrackingParent && isBootstrapWindow) {
     console.debug('[mesh-fix] bootstrap scale lock', {
-      rawScale,
       trackingSafeScale,
       scaleForRender,
       unitScale,
@@ -187,39 +178,19 @@ function setModelParent(useTrackingParent) {
   applyTransform();
 }
 
-// 초기 라벨 동기화(기본값 표시 보장)
-scaleValueLabel.textContent = parseFloat(scaleSlider.value).toFixed(2);
-gainValueLabel.textContent = parseFloat(gainSlider.value).toFixed(1);
-rotXValueLabel.textContent = String(parseInt(rotXSlider.value, 10));
-rotYValueLabel.textContent = String(parseInt(rotYSlider.value, 10));
-rotZValueLabel.textContent = String(parseInt(rotZSlider.value, 10));
-
-scaleSlider.addEventListener('input', () => {
-  scaleValueLabel.textContent = parseFloat(scaleSlider.value).toFixed(2);
-  applyTransform();
-});
-gainSlider.addEventListener('input', () => {
-  gainValueLabel.textContent = parseFloat(gainSlider.value).toFixed(1);
-  applyTransform();
-});
-rotXSlider.addEventListener('input', () => {
-  rotXValueLabel.textContent = String(parseInt(rotXSlider.value, 10));
-  applyTransform();
-});
-rotYSlider.addEventListener('input', () => {
-  rotYValueLabel.textContent = String(parseInt(rotYSlider.value, 10));
-  applyTransform();
-});
-rotZSlider.addEventListener('input', () => {
-  rotZValueLabel.textContent = String(parseInt(rotZSlider.value, 10));
-  applyTransform();
-});
+function ensureCharacterAnimationPlaying() {
+  if (!activeAction) return;
+  if (!activeAction.isRunning()) {
+    activeAction.play();
+  }
+}
 
 const gltfLoader = new THREE.GLTFLoader();
 gltfLoader.load(
   'assets/untitled.glb',
   (gltf) => {
     const model = gltf.scene;
+    const clips = Array.isArray(gltf.animations) ? gltf.animations : [];
     let skinnedCount = 0;
     let meshCount = 0;
     let transparentMatCount = 0;
@@ -304,6 +275,26 @@ gltfLoader.load(
 
     // 슬라이더 초기값 반영
     applyTransform();
+    if (clips.length > 0) {
+      const armClip =
+        clips.find((clip) => /arm/i.test(clip.name)) ||
+        clips.find((clip) => /idle/i.test(clip.name)) ||
+        clips[0];
+      animationMixer = new THREE.AnimationMixer(model);
+      activeAction = animationMixer.clipAction(armClip);
+      activeAction.setLoop(THREE.LoopRepeat, Infinity);
+      activeAction.clampWhenFinished = false;
+      activeAction.enabled = true;
+      activeAction.play();
+      if (!markerRoot.visible) {
+        animationMixer.timeScale = 0;
+      }
+      console.info('[anim] clip selected', {
+        selected: armClip.name,
+        totalClips: clips.length,
+        allClipNames: clips.map((clip) => clip.name),
+      });
+    }
     if (DEBUG_MESH) {
       console.info('[mesh-fix] model stats', {
         meshCount,
@@ -311,8 +302,13 @@ gltfLoader.load(
         unitScale,
         rawSize: { x: size.x, y: size.y, z: size.z },
         baseOffset,
-        sliderScale: parseFloat(scaleSlider.value),
-        gain: parseFloat(gainSlider.value),
+        defaultScale: DEFAULT_MODEL_SCALE,
+        defaultGain: DEFAULT_MODEL_GAIN,
+        defaultRotationDeg: {
+          x: DEFAULT_ROT_X_DEG,
+          y: DEFAULT_ROT_Y_DEG,
+          z: DEFAULT_ROT_Z_DEG,
+        },
         transparentMatCount,
         alphaTestMatCount,
         materialSignalCount: materialSignals.length,
@@ -339,10 +335,12 @@ markerControls.addEventListener('markerFound', () => {
   _trackingScaleRestored = false;
   applyTransform();
   if (loadedModel) loadedModel.visible = true;
+  if (animationMixer) animationMixer.timeScale = 1;
+  ensureCharacterAnimationPlaying();
   if (DEBUG_MESH) {
     console.info('[mesh-fix] markerFound', {
       trackingScaleUnlockMs: TRACKING_BOOTSTRAP_MS,
-      sliderScale: parseFloat(scaleSlider.value),
+      defaultScale: DEFAULT_MODEL_SCALE,
     });
   }
 });
@@ -350,6 +348,7 @@ markerControls.addEventListener('markerLost',  () => {
   _trackingScaleUnlockAt = 0;
   _trackingScaleRestored = true;
   if (loadedModel) loadedModel.visible = false;
+  if (animationMixer) animationMixer.timeScale = 0;
 });
 
 // ─────────────────────────────────────────────
@@ -382,6 +381,7 @@ window.addEventListener('resize', onResize);
 
 function animate(timestamp) {
   requestAnimationFrame(animate);
+  const deltaSec = animationClock.getDelta();
 
   // 탭이 숨겨진 상태면 모든 연산 스킵 (백그라운드 발열 방지)
   if (document.hidden) return;
@@ -427,6 +427,10 @@ function animate(timestamp) {
     // 워밍업 창이 끝나면 사용자 스케일을 즉시 다시 반영
     _trackingScaleRestored = true;
     applyTransform();
+  }
+
+  if (animationMixer) {
+    animationMixer.update(deltaSec);
   }
 
   // opacity는 값이 실제로 바뀔 때만 DOM에 접근 (매 프레임 스타일 재계산 방지)
