@@ -2,18 +2,19 @@
 // Phase 3: Three.js 씬 / AR.js 소스·컨텍스트 초기화
 // ─────────────────────────────────────────────
 
-const clock = new THREE.Clock();
 
 // ── Renderer ──────────────────────────────────
 // 모바일에서 MSAA는 시각적 이득 없이 GPU 발열만 유발
 const _isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-const renderer = new THREE.WebGLRenderer({ antialias: !_isMobile, alpha: true });
+const renderer = new THREE.WebGLRenderer({ antialias: !_isMobile, alpha: true, precision: 'highp' });
 // 3x Retina 기기에서 픽셀 처리량 과다 방지 (2 이상은 AR 앱에서 무의미)
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.domElement.style.position = 'absolute';
 renderer.domElement.style.top = '0px';
 renderer.domElement.style.left = '0px';
+renderer.domElement.style.zIndex = '1';
+renderer.domElement.style.pointerEvents = 'none';
 document.getElementById('ar-container').appendChild(renderer.domElement);
 
 // ── Scene / Camera ────────────────────────────
@@ -24,8 +25,32 @@ scene.add(camera);
 // ── AR 카메라 소스 (기기 카메라) ──────────────
 const arToolkitSource = new THREEx.ArToolkitSource({ sourceType: 'webcam' });
 
+function attachCameraVideoLayer() {
+  const container = document.getElementById('ar-container');
+  const sourceEl = arToolkitSource.domElement;
+  if (!container || !sourceEl) return;
+  // 카메라 비디오는 항상 배경 레이어에 고정한다.
+  sourceEl.style.position = 'absolute';
+  sourceEl.style.top = '0px';
+  sourceEl.style.left = '0px';
+  sourceEl.style.width = '100%';
+  sourceEl.style.height = '100%';
+  sourceEl.style.objectFit = 'cover';
+  sourceEl.style.zIndex = '0';
+  sourceEl.style.pointerEvents = 'none';
+  sourceEl.style.display = 'block';
+  sourceEl.style.visibility = 'visible';
+  sourceEl.setAttribute('playsinline', 'true');
+  sourceEl.setAttribute('muted', 'true');
+  if (sourceEl.parentElement !== container) {
+    container.insertBefore(sourceEl, renderer.domElement);
+  }
+}
+
 arToolkitSource.init(() => {
+  attachCameraVideoLayer();
   arToolkitSource.domElement.addEventListener('canplay', () => {
+    attachCameraVideoLayer();
     onResize();
   });
 });
@@ -56,8 +81,12 @@ const markerControls = new THREEx.ArMarkerControls(arToolkitContext, markerRoot,
 const smoothedRoot = new THREE.Group();
 scene.add(smoothedRoot);
 smoothedRoot.visible = false;
+// 모델은 별도 루트에 두고, 트래킹 포즈를 수동 복사해 스킨 왜곡 리스크를 줄임
+const modelRoot = new THREE.Group();
+scene.add(modelRoot);
+modelRoot.visible = false;
 
-const SMOOTHING_ALPHA = 0.18; // 0~1 (값이 작을수록 더 부드럽지만 지연이 커짐)
+const SMOOTHING_ALPHA = 0.10; // 0~1 (값이 작을수록 더 부드럽고 포즈 급변 노이즈가 줄어듦)
 let hasSmoothedPose = false;
 const _tmpPos = new THREE.Vector3();
 const _tmpQuat = new THREE.Quaternion();
@@ -76,84 +105,87 @@ let _lastMarkerVisible = null;       // DOM 업데이트 중복 방지용
 // Phase 4: 3D 모델 로드 및 이벤트 연결
 // ─────────────────────────────────────────────
 
-let mixer = null;
 let loadedModel = null;
 let unitScale = 1;     // maxAxis 기준 1배율일 때의 normalizedScale
 let baseOffset = { x: 0, y: 0, z: 0 };  // 바닥 중앙 정렬 오프셋 (scale=1 기준)
 markerRoot.visible = false;
 let _isTrackingParent = false;
-// 포지션은 고정 중앙 정렬로 유지하고, 회전만 UI로 조절
+const DEBUG_MESH = true;
+// 안정 구간: 슬라이더 값은 유지하되 실제 좌표는 축소/클램프 적용
 const TRACKING_Y_LIFT = 0.18; // 마커 표면 위로 캐릭터를 띄우는 기본 높이
 const TRACKING_CENTER_SHIFT_X = 0.5; // NFT 원점(좌하단) -> 중앙 보정
 const TRACKING_CENTER_SHIFT_Y = 0.5; // NFT 원점(좌하단) -> 중앙 보정
 const TRACKING_CENTER_SHIFT_Z = 0.0;
-const FIXED_TRACKING_SCALE = 1.8; // 과도한 스케일로 인한 깨짐 방지
-const PREVIEW_SCALE = 1.0;
-// 제거된 포지션 UI의 기본값을 코드 상수로 고정 적용
-const DEFAULT_OFFSET_X = 150;
-const DEFAULT_OFFSET_Y = 0;
-const DEFAULT_OFFSET_Z = -150;
-const DEFAULT_OFFSET_GAIN = 20.0;
-const BASE_OFFSET_UNIT = 0.001;
-const MAX_TRACKING_FIXED_OFFSET = 1.5;
+const MIN_SAFE_SCALE = 0.1;
+const MAX_SAFE_SCALE = 40.0;
+const TRACKING_MAX_SAFE_SCALE = 16.0; // 트래킹 중 과도한 확대를 제한
+const TRACKING_BOOTSTRAP_MS = 220;    // markerFound 직후 스케일 워밍업 시간
+let _trackingScaleUnlockAt = 0;
+let _trackingScaleRestored = true;
 
 // 슬라이더 연결
+const scaleSlider = document.getElementById('scale-slider');
 const rotXSlider = document.getElementById('rot-x-slider');
 const rotYSlider = document.getElementById('rot-y-slider');
 const rotZSlider = document.getElementById('rot-z-slider');
+const scaleValueLabel = document.getElementById('scale-value');
 const rotXValueLabel = document.getElementById('rot-x-value');
 const rotYValueLabel = document.getElementById('rot-y-value');
 const rotZValueLabel = document.getElementById('rot-z-value');
 
 function applyTransform() {
   if (!loadedModel) return;
-  const rawScale = _isTrackingParent ? FIXED_TRACKING_SCALE : PREVIEW_SCALE;
-  const s = unitScale * rawScale;
-  const offsetUnit = BASE_OFFSET_UNIT * DEFAULT_OFFSET_GAIN;
-  const fixedOffsetX = THREE.MathUtils.clamp(
-    DEFAULT_OFFSET_X * offsetUnit,
-    -MAX_TRACKING_FIXED_OFFSET,
-    MAX_TRACKING_FIXED_OFFSET
-  );
-  const fixedOffsetY = THREE.MathUtils.clamp(
-    DEFAULT_OFFSET_Y * offsetUnit,
-    -MAX_TRACKING_FIXED_OFFSET,
-    MAX_TRACKING_FIXED_OFFSET
-  );
-  const fixedOffsetZ = THREE.MathUtils.clamp(
-    DEFAULT_OFFSET_Z * offsetUnit,
-    -MAX_TRACKING_FIXED_OFFSET,
-    MAX_TRACKING_FIXED_OFFSET
-  );
-  const safeX = _isTrackingParent ? TRACKING_CENTER_SHIFT_X + fixedOffsetX : fixedOffsetX;
-  const safeY = _isTrackingParent ? TRACKING_CENTER_SHIFT_Y + fixedOffsetY : fixedOffsetY;
-  const safeZ = _isTrackingParent ? TRACKING_CENTER_SHIFT_Z + fixedOffsetZ : fixedOffsetZ;
+  const rawScale = THREE.MathUtils.clamp(parseFloat(scaleSlider.value), MIN_SAFE_SCALE, MAX_SAFE_SCALE);
+  const trackingSafeScale = Math.min(rawScale, TRACKING_MAX_SAFE_SCALE);
+  const isBootstrapWindow = _isTrackingParent && performance.now() < _trackingScaleUnlockAt;
+  const scaleForRender = isBootstrapWindow ? Math.min(trackingSafeScale, 6.0) : trackingSafeScale;
+  const s = unitScale * scaleForRender;
+  const safeX = 0;
+  const safeY = 0;
+  const safeZ = 0;
+  const anchorX = _isTrackingParent ? TRACKING_CENTER_SHIFT_X : 0;
+  const anchorY = _isTrackingParent ? TRACKING_CENTER_SHIFT_Y : 0;
+  const anchorZ = _isTrackingParent ? TRACKING_CENTER_SHIFT_Z : 0;
   const liftY = _isTrackingParent ? 0 : TRACKING_Y_LIFT;
   loadedModel.scale.setScalar(s);
   loadedModel.position.set(
-    baseOffset.x * s + safeX,
-    baseOffset.y * s + safeY + liftY,
-    baseOffset.z * s + safeZ
+    baseOffset.x * s + anchorX + safeX,
+    baseOffset.y * s + anchorY + safeY + liftY,
+    baseOffset.z * s + anchorZ + safeZ
   );
   loadedModel.rotation.set(
     THREE.MathUtils.degToRad(parseFloat(rotXSlider.value)),
     THREE.MathUtils.degToRad(parseFloat(rotYSlider.value)),
     THREE.MathUtils.degToRad(parseFloat(rotZSlider.value))
   );
+  if (DEBUG_MESH && _isTrackingParent && isBootstrapWindow) {
+    console.debug('[mesh-fix] bootstrap scale lock', {
+      rawScale,
+      trackingSafeScale,
+      scaleForRender,
+      unitScale,
+      finalScalar: s,
+    });
+  }
 }
 
 function setModelParent(useTrackingParent) {
   if (!loadedModel) return;
-  if (useTrackingParent) smoothedRoot.add(loadedModel);
   _isTrackingParent = useTrackingParent;
+  modelRoot.visible = useTrackingParent;
   applyTransform();
 }
 
 // 초기 라벨 동기화(기본값 표시 보장)
+scaleValueLabel.textContent = parseFloat(scaleSlider.value).toFixed(2);
 rotXValueLabel.textContent = String(parseInt(rotXSlider.value, 10));
 rotYValueLabel.textContent = String(parseInt(rotYSlider.value, 10));
 rotZValueLabel.textContent = String(parseInt(rotZSlider.value, 10));
 
+scaleSlider.addEventListener('input', () => {
+  scaleValueLabel.textContent = parseFloat(scaleSlider.value).toFixed(2);
+  applyTransform();
+});
 rotXSlider.addEventListener('input', () => {
   rotXValueLabel.textContent = String(parseInt(rotXSlider.value, 10));
   applyTransform();
@@ -169,12 +201,15 @@ rotZSlider.addEventListener('input', () => {
 
 const gltfLoader = new THREE.GLTFLoader();
 gltfLoader.load(
-  'assets/Character.glb',
+  'assets/newModel.glb',
   (gltf) => {
     const model = gltf.scene;
+    let skinnedCount = 0;
+    let meshCount = 0;
     // GLB에 포함된 vertex color(COLOR_0/COLOR_1)로 인한 얼룩 패턴 방지
     model.traverse((obj) => {
       if (!obj.isMesh) return;
+      meshCount += 1;
       obj.frustumCulled = false;
       if (obj.geometry) {
         obj.geometry.deleteAttribute('color');
@@ -183,15 +218,21 @@ gltfLoader.load(
         }
       }
       if (obj.isSkinnedMesh && typeof obj.normalizeSkinWeights === 'function') {
+        skinnedCount += 1;
         obj.normalizeSkinWeights();
       }
       const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
       materials.forEach((mat) => {
         if (!mat) return;
         mat.vertexColors = false;
-        mat.side = THREE.FrontSide;
+        // 포즈 변화 중 백페이스 누락이 깨짐처럼 보이는 메쉬만 양면 렌더링
+        mat.side = obj.isSkinnedMesh ? THREE.DoubleSide : THREE.FrontSide;
+        mat.transparent = false;
+        mat.opacity = 1.0;
+        mat.alphaTest = 0.0;
         mat.depthWrite = true;
         mat.depthTest = true;
+        mat.precision = 'highp';
         mat.needsUpdate = true;
       });
     });
@@ -215,49 +256,24 @@ gltfLoader.load(
     };
 
     loadedModel = model;
+    modelRoot.add(model);
     // 시작 시에는 숨김 상태. 마커 인식 시 AR 루트에 붙여서 표시.
     model.visible = false;
     _isTrackingParent = false;
 
     // 슬라이더 초기값 반영
     applyTransform();
-
-    if (gltf.animations && gltf.animations.length > 0) {
-      console.table(gltf.animations.map((clip, index) => ({
-        index,
-        name: clip.name,
-        durationSec: Number(clip.duration.toFixed(2)),
-      })));
-      mixer = new THREE.AnimationMixer(model);
-      const clipByName = new Map(gltf.animations.map((clip) => [clip.name, clip]));
-      const defaultClip =
-        clipByName.get('Armature|Idle') ||
-        clipByName.get('Idle') ||
-        clipByName.get('Armature|Run.001') ||
-        clipByName.get('Armature|Run.002') ||
-        clipByName.get('Run') ||
-        clipByName.get('Run.001') ||
-        gltf.animations.find((clip) => {
-          const tail = (clip.name || '').split('|').pop() || '';
-          return tail.toLowerCase().startsWith('idle');
-        }) ||
-        gltf.animations.find((clip) => {
-          const tail = (clip.name || '').split('|').pop() || '';
-          return tail.toLowerCase().startsWith('run');
-        }) ||
-        gltf.animations[0];
-      mixer.stopAllAction();
-      const action = mixer.clipAction(defaultClip);
-      action.setLoop(THREE.LoopRepeat, Infinity);
-      action.clampWhenFinished = false;
-      action.enabled = true;
-      action.setEffectiveTimeScale(1);
-      action.setEffectiveWeight(1);
-      action.time = 0;
-      action.reset();
-      action.play();
-      console.log(`기본 재생 클립(Idle 우선): ${defaultClip.name}`);
+    if (DEBUG_MESH) {
+      console.info('[mesh-fix] model stats', {
+        meshCount,
+        skinnedCount,
+        unitScale,
+        rawSize: { x: size.x, y: size.y, z: size.z },
+        baseOffset,
+        sliderScale: parseFloat(scaleSlider.value),
+      });
     }
+
   },
   (xhr) => {
     if (!xhr.total) return;
@@ -273,9 +289,20 @@ markerControls.addEventListener('markerFound', () => { markerRoot.visible = true
 markerControls.addEventListener('markerLost',  () => { markerRoot.visible = false; });
 markerControls.addEventListener('markerFound', () => {
   setModelParent(true);
+  _trackingScaleUnlockAt = performance.now() + TRACKING_BOOTSTRAP_MS;
+  _trackingScaleRestored = false;
+  applyTransform();
   if (loadedModel) loadedModel.visible = true;
+  if (DEBUG_MESH) {
+    console.info('[mesh-fix] markerFound', {
+      trackingScaleUnlockMs: TRACKING_BOOTSTRAP_MS,
+      sliderScale: parseFloat(scaleSlider.value),
+    });
+  }
 });
 markerControls.addEventListener('markerLost',  () => {
+  _trackingScaleUnlockAt = 0;
+  _trackingScaleRestored = true;
   if (loadedModel) loadedModel.visible = false;
 });
 
@@ -317,8 +344,6 @@ function animate(timestamp) {
   if (timestamp - _lastRenderTime < RENDER_MS) return;
   _lastRenderTime = timestamp;
 
-  const delta = clock.getDelta();
-
   // AR 특징점 검출을 15fps로 제한 — 렌더보다 CPU 비용이 훨씬 큼
   if (arToolkitSource.ready && timestamp - _lastARTime >= AR_MS) {
     arToolkitContext.update(arToolkitSource.domElement);
@@ -334,21 +359,29 @@ function animate(timestamp) {
     if (!hasSmoothedPose) {
       smoothedRoot.position.copy(_tmpPos);
       smoothedRoot.quaternion.copy(_tmpQuat);
-      // NFT scale 변동은 스키닝 메쉬 왜곡을 유발할 수 있어 고정 스케일 유지
+      // 마커 scale 변동은 스킨 메쉬 왜곡 원인이 되어 고정 스케일로 유지
       smoothedRoot.scale.set(1, 1, 1);
       hasSmoothedPose = true;
     } else {
       smoothedRoot.position.lerp(_tmpPos, SMOOTHING_ALPHA);
       smoothedRoot.quaternion.slerp(_tmpQuat, SMOOTHING_ALPHA);
-      // marker scale은 적용하지 않고 고정값 유지
       smoothedRoot.scale.set(1, 1, 1);
     }
+    // 트래킹 포즈를 모델 루트에 수동 반영 (scale은 항상 1 유지)
+    modelRoot.position.copy(smoothedRoot.position);
+    modelRoot.quaternion.copy(smoothedRoot.quaternion);
+    modelRoot.scale.set(1, 1, 1);
   } else {
     smoothedRoot.visible = false;
+    modelRoot.visible = false;
     hasSmoothedPose = false;
   }
 
-  if (mixer) mixer.update(delta);
+  if (_isTrackingParent && !_trackingScaleRestored && performance.now() >= _trackingScaleUnlockAt) {
+    // 워밍업 창이 끝나면 사용자 스케일을 즉시 다시 반영
+    _trackingScaleRestored = true;
+    applyTransform();
+  }
 
   // opacity는 값이 실제로 바뀔 때만 DOM에 접근 (매 프레임 스타일 재계산 방지)
   const isVisible = markerRoot.visible;

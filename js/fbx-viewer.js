@@ -47,7 +47,7 @@
 
   const loader = new THREE.GLTFLoader();
   loader.load(
-    "assets/Character.glb",
+    "assets/newModel.glb",
     (gltf) => {
       const model = gltf.scene;
       fitModel(model);
