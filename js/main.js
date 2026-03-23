@@ -81,6 +81,13 @@ let loadedModel = null;
 let unitScale = 1;     // maxAxis 기준 1배율일 때의 normalizedScale
 let baseOffset = { x: 0, y: 0, z: 0 };  // 바닥 중앙 정렬 오프셋 (scale=1 기준)
 markerRoot.visible = false;
+let _isTrackingParent = false;
+// 슬라이더의 큰 숫자를 AR 좌표계의 안전 범위로 매핑하기 위한 스케일
+const OFFSET_UNIT = 0.001;
+const PREVIEW_OFFSET_LIMIT = 2.5;
+const TRACKING_OFFSET_LIMIT = 1.2;
+const MIN_SAFE_SCALE = 0.1;
+const MAX_SAFE_SCALE = 120.0;
 
 // 슬라이더 연결
 const scaleSlider = document.getElementById('scale-slider');
@@ -100,18 +107,30 @@ const rzValueLabel = document.getElementById('rz-value');
 
 function applyTransform() {
   if (!loadedModel) return;
-  const s = unitScale * parseFloat(scaleSlider.value);
+  const rawScale = THREE.MathUtils.clamp(parseFloat(scaleSlider.value), MIN_SAFE_SCALE, MAX_SAFE_SCALE);
+  const s = unitScale * rawScale;
+  const offsetLimit = _isTrackingParent ? TRACKING_OFFSET_LIMIT : PREVIEW_OFFSET_LIMIT;
+  const safeX = THREE.MathUtils.clamp(parseFloat(xSlider.value) * OFFSET_UNIT, -offsetLimit, offsetLimit);
+  const safeY = THREE.MathUtils.clamp(parseFloat(ySlider.value) * OFFSET_UNIT, -offsetLimit, offsetLimit);
+  const safeZ = THREE.MathUtils.clamp(parseFloat(zSlider.value) * OFFSET_UNIT, -offsetLimit, offsetLimit);
   loadedModel.scale.setScalar(s);
   loadedModel.position.set(
-    baseOffset.x * s + parseFloat(xSlider.value),
-    baseOffset.y * s + parseFloat(ySlider.value),
-    baseOffset.z * s + parseFloat(zSlider.value)
+    baseOffset.x * s + safeX,
+    baseOffset.y * s + safeY,
+    baseOffset.z * s + safeZ
   );
   loadedModel.rotation.set(
     THREE.MathUtils.degToRad(parseFloat(rxSlider.value)),
     THREE.MathUtils.degToRad(parseFloat(rySlider.value)),
     THREE.MathUtils.degToRad(parseFloat(rzSlider.value))
   );
+}
+
+function setModelParent(useTrackingParent) {
+  if (!loadedModel) return;
+  if (useTrackingParent) smoothedRoot.add(loadedModel);
+  _isTrackingParent = useTrackingParent;
+  applyTransform();
 }
 
 // 초기 라벨 동기화(기본값 표시 보장)
@@ -154,9 +173,25 @@ rzSlider.addEventListener('input', () => {
 
 const gltfLoader = new THREE.GLTFLoader();
 gltfLoader.load(
-  'assets/model.glb',
+  'assets/Character.glb',
   (gltf) => {
     const model = gltf.scene;
+    // GLB에 포함된 vertex color(COLOR_0/COLOR_1)로 인한 얼룩 패턴 방지
+    model.traverse((obj) => {
+      if (!obj.isMesh) return;
+      if (obj.geometry) {
+        obj.geometry.deleteAttribute('color');
+      }
+      const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+      materials.forEach((mat) => {
+        if (!mat) return;
+        mat.vertexColors = false;
+        mat.side = THREE.FrontSide;
+        mat.depthWrite = true;
+        mat.depthTest = true;
+        mat.needsUpdate = true;
+      });
+    });
 
     // 바운딩박스로 모델 실제 크기 측정
     const box = new THREE.Box3().setFromObject(model);
@@ -177,17 +212,54 @@ gltfLoader.load(
     };
 
     loadedModel = model;
-    smoothedRoot.add(model);
+    // 시작 시에는 숨김 상태. 마커 인식 시 AR 루트에 붙여서 표시.
+    model.visible = false;
+    _isTrackingParent = false;
 
     // 슬라이더 초기값 반영
     applyTransform();
 
     if (gltf.animations && gltf.animations.length > 0) {
+      console.table(gltf.animations.map((clip, index) => ({
+        index,
+        name: clip.name,
+        durationSec: Number(clip.duration.toFixed(2)),
+      })));
       mixer = new THREE.AnimationMixer(model);
-      mixer.clipAction(gltf.animations[0]).play();
+      const clipByName = new Map(gltf.animations.map((clip) => [clip.name, clip]));
+      const defaultClip =
+        clipByName.get('Armature|Idle') ||
+        clipByName.get('Idle') ||
+        clipByName.get('Armature|Run.001') ||
+        clipByName.get('Armature|Run.002') ||
+        clipByName.get('Run') ||
+        clipByName.get('Run.001') ||
+        gltf.animations.find((clip) => {
+          const tail = (clip.name || '').split('|').pop() || '';
+          return tail.toLowerCase().startsWith('idle');
+        }) ||
+        gltf.animations.find((clip) => {
+          const tail = (clip.name || '').split('|').pop() || '';
+          return tail.toLowerCase().startsWith('run');
+        }) ||
+        gltf.animations[0];
+      mixer.stopAllAction();
+      const action = mixer.clipAction(defaultClip);
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      action.clampWhenFinished = false;
+      action.enabled = true;
+      action.setEffectiveTimeScale(1);
+      action.setEffectiveWeight(1);
+      action.time = 0;
+      action.reset();
+      action.play();
+      console.log(`기본 재생 클립(Idle 우선): ${defaultClip.name}`);
     }
   },
-  (xhr) => console.log(`모델 로딩: ${((xhr.loaded / xhr.total) * 100).toFixed(1)}%`),
+  (xhr) => {
+    if (!xhr.total) return;
+    console.log(`모델 로딩: ${((xhr.loaded / xhr.total) * 100).toFixed(1)}%`);
+  },
   (err) => console.error('모델 로드 실패:', err)
 );
 
@@ -196,6 +268,13 @@ const statusMsg = document.getElementById('status-msg');
 
 markerControls.addEventListener('markerFound', () => { markerRoot.visible = true;  });
 markerControls.addEventListener('markerLost',  () => { markerRoot.visible = false; });
+markerControls.addEventListener('markerFound', () => {
+  setModelParent(true);
+  if (loadedModel) loadedModel.visible = true;
+});
+markerControls.addEventListener('markerLost',  () => {
+  if (loadedModel) loadedModel.visible = false;
+});
 
 // ─────────────────────────────────────────────
 // Phase 5: 라이팅
