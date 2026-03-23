@@ -75,6 +75,7 @@
         flex-shrink: 0;
       }
       .ctrl-row label.lbl-scale { color: #fff; }
+      .ctrl-row label.lbl-gain  { color: #7dffa6; width: 24px; }
       .ctrl-row label.lbl-rx    { color: #ffcf5a; width: 24px; }
       .ctrl-row label.lbl-ry    { color: #d37bff; width: 24px; }
       .ctrl-row label.lbl-rz    { color: #52d9ff; width: 24px; }
@@ -113,8 +114,13 @@
     <div id="ctrl-panel">
       <div class="ctrl-row">
         <label class="lbl-scale">S</label>
-        <input class="ctrl-slider" id="scale-slider" type="range" min="0.1" max="40.0" step="0.05" value="6.00" />
-        <span class="ctrl-val" id="scale-value">6.00</span>
+        <input class="ctrl-slider" id="scale-slider" type="range" min="0.1" max="220.0" step="0.1" value="1.2" />
+        <span class="ctrl-val" id="scale-value">1.20</span>
+      </div>
+      <div class="ctrl-row">
+        <label class="lbl-gain">G</label>
+        <input class="ctrl-slider" id="gain-slider" type="range" min="1.0" max="60.0" step="0.5" value="4.0" />
+        <span class="ctrl-val" id="gain-value">4.0</span>
       </div>
       <div class="ctrl-row">
         <label class="lbl-rx">Rx</label>
@@ -133,16 +139,10 @@
       </div>
     </div>
 
-    <!-- Three.js r128 (AR.js 호환 안정 버전) -->
+    <!-- Three.js r128 -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
-
-    <!-- GLTFLoader -->
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-
-    <!-- AR.js NFT (이미지 트래킹) — 로컬 파일로 안정 로드 -->
     <script src="js/ar-threex.js"></script>
-
-    <!-- 메인 스크립트 -->
-    <script src="js/main.js?v=meshfix-step3-1"></script>
+    <script src="js/main.js?v=ar-meshfix-step2"></script>
   </body>
 </html>

@@ -6,7 +6,12 @@
 // ── Renderer ──────────────────────────────────
 // 모바일에서 MSAA는 시각적 이득 없이 GPU 발열만 유발
 const _isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-const renderer = new THREE.WebGLRenderer({ antialias: !_isMobile, alpha: true, precision: 'highp' });
+const renderer = new THREE.WebGLRenderer({
+  antialias: !_isMobile,
+  alpha: true,
+  precision: 'highp',
+  logarithmicDepthBuffer: true,
+});
 // 3x Retina 기기에서 픽셀 처리량 과다 방지 (2 이상은 AR 앱에서 무의미)
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -117,18 +122,21 @@ const TRACKING_CENTER_SHIFT_X = 0.5; // NFT 원점(좌하단) -> 중앙 보정
 const TRACKING_CENTER_SHIFT_Y = 0.5; // NFT 원점(좌하단) -> 중앙 보정
 const TRACKING_CENTER_SHIFT_Z = 0.0;
 const MIN_SAFE_SCALE = 0.1;
-const MAX_SAFE_SCALE = 40.0;
-const TRACKING_MAX_SAFE_SCALE = 16.0; // 트래킹 중 과도한 확대를 제한
+const MAX_SAFE_SCALE = 220.0;
+const TRACKING_MAX_SAFE_SCALE = MAX_SAFE_SCALE; // 런타임 슬라이더 값을 트래킹 중에도 그대로 반영
 const TRACKING_BOOTSTRAP_MS = 220;    // markerFound 직후 스케일 워밍업 시간
+const TRACKING_RUNTIME_SCALE_CAP = 60.0; // 트래킹 중 급격한 대배율을 제한
 let _trackingScaleUnlockAt = 0;
 let _trackingScaleRestored = true;
 
 // 슬라이더 연결
 const scaleSlider = document.getElementById('scale-slider');
+const gainSlider = document.getElementById('gain-slider');
 const rotXSlider = document.getElementById('rot-x-slider');
 const rotYSlider = document.getElementById('rot-y-slider');
 const rotZSlider = document.getElementById('rot-z-slider');
 const scaleValueLabel = document.getElementById('scale-value');
+const gainValueLabel = document.getElementById('gain-value');
 const rotXValueLabel = document.getElementById('rot-x-value');
 const rotYValueLabel = document.getElementById('rot-y-value');
 const rotZValueLabel = document.getElementById('rot-z-value');
@@ -136,10 +144,13 @@ const rotZValueLabel = document.getElementById('rot-z-value');
 function applyTransform() {
   if (!loadedModel) return;
   const rawScale = THREE.MathUtils.clamp(parseFloat(scaleSlider.value), MIN_SAFE_SCALE, MAX_SAFE_SCALE);
+  const gain = THREE.MathUtils.clamp(parseFloat(gainSlider.value), 1.0, 60.0);
   const trackingSafeScale = Math.min(rawScale, TRACKING_MAX_SAFE_SCALE);
   const isBootstrapWindow = _isTrackingParent && performance.now() < _trackingScaleUnlockAt;
-  const scaleForRender = isBootstrapWindow ? Math.min(trackingSafeScale, 6.0) : trackingSafeScale;
-  const s = unitScale * scaleForRender;
+  const scaleForRender = isBootstrapWindow
+    ? Math.min(trackingSafeScale, 6.0)
+    : Math.min(trackingSafeScale, TRACKING_RUNTIME_SCALE_CAP);
+  const s = unitScale * scaleForRender * gain;
   const safeX = 0;
   const safeY = 0;
   const safeZ = 0;
@@ -178,12 +189,17 @@ function setModelParent(useTrackingParent) {
 
 // 초기 라벨 동기화(기본값 표시 보장)
 scaleValueLabel.textContent = parseFloat(scaleSlider.value).toFixed(2);
+gainValueLabel.textContent = parseFloat(gainSlider.value).toFixed(1);
 rotXValueLabel.textContent = String(parseInt(rotXSlider.value, 10));
 rotYValueLabel.textContent = String(parseInt(rotYSlider.value, 10));
 rotZValueLabel.textContent = String(parseInt(rotZSlider.value, 10));
 
 scaleSlider.addEventListener('input', () => {
   scaleValueLabel.textContent = parseFloat(scaleSlider.value).toFixed(2);
+  applyTransform();
+});
+gainSlider.addEventListener('input', () => {
+  gainValueLabel.textContent = parseFloat(gainSlider.value).toFixed(1);
   applyTransform();
 });
 rotXSlider.addEventListener('input', () => {
@@ -201,38 +217,63 @@ rotZSlider.addEventListener('input', () => {
 
 const gltfLoader = new THREE.GLTFLoader();
 gltfLoader.load(
-  'assets/newModel.glb',
+  'assets/untitled.glb',
   (gltf) => {
     const model = gltf.scene;
     let skinnedCount = 0;
     let meshCount = 0;
-    // GLB에 포함된 vertex color(COLOR_0/COLOR_1)로 인한 얼룩 패턴 방지
+    let transparentMatCount = 0;
+    let alphaTestMatCount = 0;
+    const materialSignals = [];
+    // 모델 원본 머티리얼/버텍스 속성을 최대한 보존해 메쉬 아티팩트를 줄인다.
     model.traverse((obj) => {
       if (!obj.isMesh) return;
       meshCount += 1;
       obj.frustumCulled = false;
-      if (obj.geometry) {
-        obj.geometry.deleteAttribute('color');
-        if (!obj.geometry.attributes.normal) {
-          obj.geometry.computeVertexNormals();
-        }
-      }
+      // 일부 GLB는 COLOR_0, 투명도, 알파 테스트를 의도적으로 사용하므로 삭제/강제 덮어쓰기를 피한다.
       if (obj.isSkinnedMesh && typeof obj.normalizeSkinWeights === 'function') {
         skinnedCount += 1;
         obj.normalizeSkinWeights();
       }
       const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-      materials.forEach((mat) => {
+      materials.forEach((mat, matIndex) => {
         if (!mat) return;
-        mat.vertexColors = false;
-        // 포즈 변화 중 백페이스 누락이 깨짐처럼 보이는 메쉬만 양면 렌더링
-        mat.side = obj.isSkinnedMesh ? THREE.DoubleSide : THREE.FrontSide;
-        mat.transparent = false;
-        mat.opacity = 1.0;
-        mat.alphaTest = 0.0;
-        mat.depthWrite = true;
-        mat.depthTest = true;
-        mat.precision = 'highp';
+        const hasAlphaMap = Boolean(mat.alphaMap);
+        const usesAlphaTest = typeof mat.alphaTest === 'number' && mat.alphaTest > 0.0001;
+        const isTransparent = mat.transparent === true;
+        const isOpaqueByOpacity = typeof mat.opacity !== 'number' || mat.opacity >= 0.999;
+        if (mat.transparent === true) transparentMatCount += 1;
+        if (usesAlphaTest) alphaTestMatCount += 1;
+        const isCutout = hasAlphaMap || usesAlphaTest;
+        const matName = mat.name || `${obj.name || obj.uuid}-mat${matIndex}`;
+
+        if (isCutout) {
+          // 컷아웃(알파맵/알파테스트) 재질: 정렬 충돌을 피하기 위해 depth write를 끈다.
+          mat.transparent = true;
+          mat.depthWrite = false;
+          if (!usesAlphaTest) mat.alphaTest = 0.5;
+          mat.side = THREE.DoubleSide;
+        } else {
+          // 불투명 재질은 투명도를 끄고 depth write를 활성화해 배경 비침을 차단한다.
+          mat.transparent = false;
+          mat.opacity = 1.0;
+          mat.alphaTest = 0.0;
+          mat.depthWrite = true;
+          mat.side = THREE.FrontSide;
+        }
+        materialSignals.push({
+          mesh: obj.name || obj.uuid,
+          material: matName,
+          transparentBefore: isTransparent,
+          transparentAfter: mat.transparent,
+          hasAlphaMap,
+          alphaTestBefore: usesAlphaTest ? mat.alphaTest : 0,
+          alphaTestAfter: mat.alphaTest || 0,
+          opacityBefore: typeof mat.opacity === 'number' ? mat.opacity : 1,
+          isOpaqueByOpacity,
+          depthWrite: mat.depthWrite,
+          side: mat.side === THREE.DoubleSide ? 'DoubleSide' : 'FrontSide',
+        });
         mat.needsUpdate = true;
       });
     });
@@ -271,7 +312,12 @@ gltfLoader.load(
         rawSize: { x: size.x, y: size.y, z: size.z },
         baseOffset,
         sliderScale: parseFloat(scaleSlider.value),
+        gain: parseFloat(gainSlider.value),
+        transparentMatCount,
+        alphaTestMatCount,
+        materialSignalCount: materialSignals.length,
       });
+      console.table(materialSignals.slice(0, 20));
     }
 
   },
